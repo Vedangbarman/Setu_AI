@@ -140,7 +140,7 @@ if user_query:
                     )
 
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-2.5-flash-lite',
                     contents=api_contents,
                     config=types.GenerateContentConfig(
                         system_instruction=system_instruction
@@ -159,4 +159,5 @@ if user_query:
             except Exception as e:
                 st.error(f"System Exception: {e}")
                 if st.session_state.messages:
+
                     st.session_state.messages.pop()
