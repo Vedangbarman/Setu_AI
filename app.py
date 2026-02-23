@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import fitz  # PyMuPDF for PDF to Image conversion
 from google import genai
 from dotenv import load_dotenv
 from google.genai import types
@@ -26,9 +27,9 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### Application Features")
-    st.markdown("- **Domain Expertise**: Specializes in Computer Science, Programming, DSA, and DAA.")
+    st.markdown("- **Domain Expertise**: Specializes in B.Tech CSE, Programming, DSA, and DAA.")
     st.markdown("- **Dynamic Localization**: Toggle output between English, Hindi, and Hinglish.")
-    st.markdown("- **Multimodal Processing**: Native support for multiple PDF and Image analysis simultaneously.")
+    st.markdown("- **Multimodal Processing**: Native support for PDF (Max 5 pages) and Image analysis.")
     st.markdown("- **Contextual Memory**: Remembers session history for follow-up questions.")
     st.markdown("- **Export Functionality**: Download session notes as a Markdown document.")
     st.markdown("---")
@@ -58,8 +59,8 @@ with st.sidebar:
     st.markdown("To toggle Light/Night Mode, click the Menu icon (⋮) in the top right, select **Settings**, and adjust the **Theme**.")
 
 # 4. Main Application Header
-st.title("Setu_AI: Technical Assistant")
-st.markdown("Upload technical documents or images, or submit a direct query regarding programming and algorithms.")
+st.title("Setu_AI: B.Tech Academic Assistant")
+st.markdown("Upload CSE technical documents, university schedules, or submit a direct programming query.")
 
 # Display Chat History
 for msg in st.session_state.messages:
@@ -67,9 +68,10 @@ for msg in st.session_state.messages:
         st.markdown(msg["display_text"])
 
 # 5. Input Modules
-uploaded_files = st.file_uploader("Attach Files (PDF, JPG, PNG) [Optional]", type=["pdf", "jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Attach Files (PDF, JPG, PNG) [Max 5 Pages Total]", type=["pdf", "jpg", "jpeg", "png"], accept_multiple_files=True)
 user_query = st.chat_input("Enter your technical query here...")
 
+# 6. Execution Logic
 # 6. Execution Logic
 if user_query:
     display_user_text = user_query
@@ -86,70 +88,70 @@ if user_query:
         "api_parts": []
     }
     
-    # Pack files as Pydantic binary parts
+    # --- STEP A: PROCESS FILES ---
     if uploaded_files:
         for uploaded_file in uploaded_files:
             file_bytes = uploaded_file.getvalue()
             file_extension = uploaded_file.name.split('.')[-1].lower()
+            
             if file_extension == 'pdf':
-                mime_type = 'application/pdf'
-            elif file_extension in ['jpg', 'jpeg']:
-                mime_type = 'image/jpeg'
-            elif file_extension == 'png':
-                mime_type = 'image/png'
-                
-            user_message_dict["api_parts"].append(
-                types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
-            )
-        
-    # FIX: Pack text as a strict Pydantic text part
-    user_message_dict["api_parts"].append(
-        types.Part.from_text(text=user_query)
-    )
-    
+                try:
+                    pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
+                    # We store the PDF text as a clean string first
+                    raw_text = f"\nDOCUMENT CONTEXT ({uploaded_file.name}):\n"
+                    for page_num in range(len(pdf_document)):
+                        page = pdf_document.load_page(page_num)
+                        raw_text += f"--- Page {page_num + 1} ---\n{page.get_text()}\n"
+                    pdf_document.close()
+                    
+                    # Wrap the extracted text in a Part
+                    user_message_dict["api_parts"].append(types.Part.from_text(text=raw_text))
+                except Exception as e:
+                    st.error(f"Error reading PDF: {e}")
+                    
+            elif file_extension in ['jpg', 'jpeg', 'png']:
+                m_type = "image/jpeg" if file_extension != 'png' else "image/png"
+                user_message_dict["api_parts"].append(
+                    types.Part.from_bytes(data=file_bytes, mime_type=m_type)
+                )
+
+    # --- STEP B: ADD THE USER QUERY ---
+    user_message_dict["api_parts"].append(types.Part.from_text(text=f"\nUSER QUESTION: {user_query}"))
     st.session_state.messages.append(user_message_dict)
 
+    # --- STEP C: GENERATE RESPONSE ---
     with st.chat_message("model"):
-        with st.spinner("Analyzing context and generating response..."):
+        with st.spinner("Setu_AI is analyzing your request..."):
             try:
                 client = genai.Client()
                 
+                # Persona Injection (Bypasses 400 error)
                 if selected_language == "English":
-                    lang_rule = "You must communicate strictly in formal, professional English."
+                    lang_rule = "Use formal, professional English."
                 elif selected_language == "Hindi":
-                    lang_rule = "You must communicate strictly in formal Hindi, using the Devanagari script."
+                    lang_rule = "Use formal Hindi (Devanagari script)."
                 else:
-                    lang_rule = "You must communicate using a natural, professional mixture of English, Hindi, and Hinglish."
+                    lang_rule = "Use a natural mixture of English, Hindi, and Hinglish."
                 
-                system_instruction = (
-                    "You are Setu_AI, a professional and formal technical assistant. "
-                    "Your expertise lies exclusively in Computer Science, programming, Data Structures and Algorithms (DSA), "
-                    "and Design and Analysis of Algorithms (DAA). "
-                    f"{lang_rule} "
-                    "CRITICAL GUARDRAIL: You are strictly limited to answering questions related to coding, computer science, and technology. "
-                    "If the user query, uploaded image, or uploaded document relates to any non-technical domain (e.g., history, general knowledge, medical), "
-                    "you must politely decline the request and state your specialized domain."
+                persona = (
+                    f"SYSTEM: You are Setu_AI. Expertise: B.Tech CSE, DSA, DAA, and Academic Logistics. "
+                    f"Instructions: {lang_rule} Always analyze attached document text or images to answer."
                 )
                 
-                api_contents = []
-                for msg in st.session_state.messages:
-                    # FIX: Ensure fallback text is also a strict Pydantic text part
-                    parts = msg.get("api_parts", [types.Part.from_text(text=msg["display_text"])])
-                    api_contents.append(
-                        types.Content(role=msg["role"], parts=parts)
-                    )
+                # Sliding Window (Last 4)
+                recent_messages = st.session_state.messages[-4:]
+                
+                api_contents = [types.Content(role="user", parts=[types.Part.from_text(text=persona)])]
+                api_contents.append(types.Content(role="model", parts=[types.Part.from_text(text="Confirmed. I have processed your academic persona.")]))
 
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash-lite',
-                    contents=api_contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction
-                    )
-                )
+                for msg in recent_messages:
+                    p = msg.get("api_parts", [types.Part.from_text(text=msg["display_text"])])
+                    api_contents.append(types.Content(role=msg["role"], parts=p))
+
+                # Final Call
+                response = client.models.generate_content(model='gemma-3-27b-it', contents=api_contents)
                 
                 st.markdown(response.text)
-                
-                # FIX: Store model response as a strict Pydantic text part
                 st.session_state.messages.append({
                     "role": "model",
                     "display_text": response.text,
@@ -158,5 +160,4 @@ if user_query:
                 
             except Exception as e:
                 st.error(f"System Exception: {e}")
-                if st.session_state.messages:
-                    st.session_state.messages.pop()
+                if st.session_state.messages: st.session_state.messages.pop()
